@@ -68,7 +68,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 import static org.apache.hudi.aws.utils.S3Utils.s3aToS3;
-import static org.apache.hudi.common.util.MapUtils.nonEmpty;
+import static org.apache.hudi.common.util.MapUtils.isNullOrEmpty;
 import static org.apache.hudi.hive.util.HiveSchemaUtil.getPartitionKeyType;
 import static org.apache.hudi.hive.util.HiveSchemaUtil.parquetSchemaToMapSchema;
 import static org.apache.hudi.sync.common.util.TableUtils.tableId;
@@ -193,7 +193,7 @@ public class AWSGlueCatalogSyncClient extends AbstractHiveSyncHoodieClient {
    */
   @Override
   public void updateTableProperties(String tableName, Map<String, String> tableProperties) {
-    if (nonEmpty(tableProperties)) {
+    if (isNullOrEmpty(tableProperties)) {
       return;
     }
     try {
@@ -210,10 +210,7 @@ public class AWSGlueCatalogSyncClient extends AbstractHiveSyncHoodieClient {
     try {
       Table table = getTable(awsGlue, databaseName, tableName);
       Map<String, String> newSchemaMap = parquetSchemaToMapSchema(newSchema, syncConfig.supportTimestamp, false);
-      List<Column> newColumns = newSchemaMap.keySet().stream().map(key -> {
-        String keyType = getPartitionKeyType(newSchemaMap, key);
-        return new Column().withName(key).withType(keyType.toLowerCase()).withComment("");
-      }).collect(Collectors.toList());
+      List<Column> newColumns = getColumnsFromSchema(newSchemaMap);
       StorageDescriptor sd = table.getStorageDescriptor();
       sd.setColumns(newColumns);
 
@@ -273,15 +270,7 @@ public class AWSGlueCatalogSyncClient extends AbstractHiveSyncHoodieClient {
     try {
       Map<String, String> mapSchema = parquetSchemaToMapSchema(storageSchema, syncConfig.supportTimestamp, false);
 
-      List<Column> schemaWithoutPartitionKeys = new ArrayList<>();
-      for (String key : mapSchema.keySet()) {
-        String keyType = getPartitionKeyType(mapSchema, key);
-        Column column = new Column().withName(key).withType(keyType.toLowerCase()).withComment("");
-        // In Glue, the full schema should exclude the partition keys
-        if (!syncConfig.partitionFields.contains(key)) {
-          schemaWithoutPartitionKeys.add(column);
-        }
-      }
+      List<Column> schemaWithoutPartitionKeys = getColumnsFromSchema(mapSchema);
 
       // now create the schema partition
       List<Column> schemaPartitionKeys = syncConfig.partitionFields.stream().map(partitionKey -> {
@@ -437,6 +426,19 @@ public class AWSGlueCatalogSyncClient extends AbstractHiveSyncHoodieClient {
   @Override
   public void deleteLastReplicatedTimeStamp(String tableName) {
     throw new UnsupportedOperationException("Not supported: `deleteLastReplicatedTimeStamp`");
+  }
+
+  private List<Column> getColumnsFromSchema(Map<String, String> mapSchema) {
+    List<Column> cols = new ArrayList<>();
+    for (String key : mapSchema.keySet()) {
+      // In Glue, the full schema should exclude the partition keys
+      if (!syncConfig.partitionFields.contains(key)) {
+        String keyType = getPartitionKeyType(mapSchema, key);
+        Column column = new Column().withName(key).withType(keyType.toLowerCase()).withComment("");
+        cols.add(column);
+      }
+    }
+    return cols;
   }
 
   private enum TableType {
